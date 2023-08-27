@@ -1,4 +1,3 @@
-
 import math
 import torch
 import torch.nn as nn
@@ -27,6 +26,7 @@ SAVE_FOLDER = "/home/dai001/Project/graphs/"
 MODEL_PATH = "/home/dai001/Project/model/transformer-model-best.pth"
 MODEL_STATE_PATH = "/home/dai001/Project/model/transformer-model-best-state.pth"
 BATCH_SIZE = 32
+WINDOW_SIZE = 5          # It is the number of words taken from the dataset for training the model
 
 
 # parameters for Matplotlib
@@ -74,8 +74,9 @@ class PositionalEncoding(nn.Module):
 ###-----------------------------------
 
 class TransformerModel(nn.Module):
-    def __init__(self, d_model, nhead, num_encoder_layers, num_decoder_layers,max_seq_len):
+    def __init__(self, embedding_matrix, d_model, nhead, num_encoder_layers, num_decoder_layers,max_seq_len):
         super(TransformerModel, self).__init__()
+        self.embedding = nn.Embedding.from_pretrained(embedding_matrix, freeze=True)
         self.positional_encoding = PositionalEncoding(d_model, max_seq_len)
         
         encoder_layer = nn.TransformerEncoderLayer(d_model, nhead)
@@ -87,6 +88,9 @@ class TransformerModel(nn.Module):
         self.dense = nn.Linear(d_model, embedding_matrix.size(0))
         
     def forward(self, src, tgt):
+        
+        src_embedding = self.embedding(src)
+        tgt_embedding = self.embedding(tgt)
         #check if need for changing order of embedding shape
         #src_embedding = src.permute(1, 0, 2)  # Permute to (seq_length, batch_size, embedding_dim)
         #tgt_embedding = tgt.permute(1, 0, 2)
@@ -104,30 +108,15 @@ class TransformerModel(nn.Module):
         return output
 
 
-
-###-----------------------------------
-### Embedding Class
-###-----------------------------------
-
-class Embedding_model(nn.Module):
-    def __init__(self, embedding_matrix):
-        super(Embedding_model, self).__init__()
-        self.embedding = nn.Embedding.from_pretrained(embedding_matrix, freeze=True)
-        
-    def forward(self, src, tgt):
-        src_embedding = self.embedding(src)
-        tgt_embedding = self.embedding(tgt)
-        
-        return src_embedding, tgt_embedding
-
-
-
 # Load pre-trained FastText Hindi embeddings
 embedding_loaded_model = fasttext.load_model("cc.hi.300.bin")
 
 #Create the embedding matrix which contains all the embedding vectors for the entire vocabulary
 #Embedding matrix has each words in rows and its embeddings as columns(this model has 300 columns)
 embedding_matrix = torch.tensor(np.array([embedding_loaded_model.get_word_vector(word) for word in embedding_loaded_model.words]))
+
+#Create a vocabulary
+vocab = embedding_loaded_model.words
 
 # Load pre-trained tokenizer
 tokenizer = indic_tokenize
@@ -142,14 +131,9 @@ max_seq_len = 100
 
 
 #Initializing the model
-model = TransformerModel(d_model, nhead, num_encoder_layers, num_decoder_layers,max_seq_len).to(device)
+model = TransformerModel(embedding_matrix, d_model, nhead, num_encoder_layers, num_decoder_layers,max_seq_len).to(device)
 print("MODEL:")
 print(model)
-
-
-embed = Embedding_model(embedding_matrix)
-print("Embedding model:")
-print(embed)
 
 
 ###-----------------------------------
@@ -175,21 +159,22 @@ class DS(Dataset):
         text = self.data[idx]
         tokens = self.tokenizer.trivial_tokenize(text)[:self.max_seq_len]
         
-        # Taking random size of words from the text to train instead of the entire sentence
-        if len(tokens)>3:
-            random_size = random.randint(3,len(tokens))
-            random_start = random.randint(0,len(tokens)-1)
-            selected = np.array(tokens[random_start:random_start+random_size])
-            target = selected[-1]
-            features = selected[:-1]
-        else:
-            features = np.array(tokens[:-1])
-            target = tokens[-1]
+        # Taking window size of words from the text to train instead of the entire sentence
+        random_size = WINDOW_SIZE
+        random_start = random.randint(0,len(tokens)-(random_size+1))
+        selected = np.array(tokens[random_start:random_start+random_size])
+        target = selected[-1]
+        features = selected[:-1]
+            
+        #Convert features and target into indices
+        features_ids = [embedding_loaded_model.get_word_id(x) for x in features]
+        target_id = embedding_loaded_model.get_word_id(target)
+        
         # Converting into tensors    
-        features = torch.tensor(features)
-        target = torch.tensor(target)
+        features_tensor = torch.tensor(features_ids).to(device)
+        target_tensor = torch.tensor(target_id).to(device)
 
-        return features,target 
+        return features_tensor,target_tensor 
 
 
 #Dataset
